@@ -1,0 +1,268 @@
+C#とC++間で名前付きパイプを使ってプロセス間通信
+
+C#で作成したGUIプログラムとC++のプログラム間で名前付きパイプを使用して，
+プロセス間通信を行おうとした際にハマったので備忘録にしておきます。
+Edit
+やりたかったこと
+
+GUIからメインプログラムに終了コマンドを送りたい。
+終了コマンドを送るときには社内的にはudpで投げつけたりすることが多いですが，
+以下の理由からパイプにしました。
+
+    もともとこのプログラム自体が通信が必要なかったことと
+    ソケット通信を双方に実装してオープンしてバッファ読んでが面倒だった
+    どうせなら双方向でメッセージのやり取りをできるようにしても良いかなと思った
+
+楽しようと思ったのですが，逆にハマってしまいました。
+
+今回はGUI(C#)側からメインプログラム側(C++)にコマンドを送りたかったので，
+C#をクライアント，C++をサーバにしました。
+Edit
+名前付きパイプ
+
+Windowsにおける名前付きパイプはプロセス間の双方向の通信を実現できます。
+ファイルのようにアクセス可能でWindows標準 I/Oで扱うことができます。
+生成時に複数のインスタスを作成することができるため，
+同時に複数のプロセスと通信が可能です。
+また，サーバをクライアントに偽装することもできます。（よくわかってない）
+データのやり取りはメッセージ単位とバイト単位のモードを選択することができます。
+
+パイプの詳しい解説をお願いします。
+雰囲気でパイプを使っているんだ。
+
+Microsoftでは以下の説明
+
+名前付きパイプは、パイプ サーバーと 1 つ以上のパイプ クライアントとの間でのプロセス間通信を提供します。 
+名前付きパイプには、ローカル コンピューター上のプロセス間通信を提供する匿名パイプと比較して、より多くの機能が用意されています。 
+名前付きパイプは、ネットワーク上の複数のサーバー インスタンスでの全二重通信、メッセージ ベースの通信、およびクライアント偽装をサポートしています。
+偽装を使用すると、プロセスを接続してリモート サーバー上で独自のアクセス許可セットを使用できます。
+
+Microsoft 方法: ネットワークのプロセス間通信で名前付きパイプを使用する
+Edit
+クライアント側(C#)の実装
+
+C#ではNamedPipeServerStreamクラスとNamedPaipeClientStreamクラスを使用して簡単に実装することができます。
+今回はクライアント側なのでNamedPaipeClientStreamを使用します。
+また，コマンドを送りたいだけなので，メッセージを送信するようにします。
+
+クライアント側の動き
+
+    サーバに接続（ConnectAsync）
+    サーバへメッセージ送信（StreamWriter）
+
+参考
+.NETで名前付きパイプを試す(1) - クライアントからサーバにメッセージを送る
+Edit
+クライアント側プログラム
+
+簡易なクライアント側プログラムです。
+GUIでボタンが押されたらサーバへメッセージを送信することとして，
+簡易クラスを作っています。
+
+//-----------------------------------------------------------------------------
+/** @brief  停止ボタンのイベント
+*
+*  @param [i ] sender
+*  @param [i ] e
+*  @retval なし
+*/
+//-----------------------------------------------------------------------------
+private async void Stop_Click(object sender, RoutedEventArgs e)
+{
+    var client = new PipeClient("namedpipe");
+    await client.SendMessage("stop");
+}
+
+//-----------------------------------------------------------------------------
+/** @brief 名前付きパイプ クライアントクラス
+*/
+//-----------------------------------------------------------------------------
+public class PipeClient
+{
+    private NamedPipeClientStream client;
+
+    public PipeClient(string sName)
+    {
+       client = new NamedPipeClientStream(".",sName, PipeDirection.InOut,
+                        PipeOptions.None, TokenImpersonationLevel.Impersonation);
+    }
+
+    public async Task<int> SendMessage(string message)
+    {
+        // 1. サーバに接続
+        if (!client.IsConnected)
+        {
+            await client.ConnectAsync();
+        }
+
+        // 2. サーバにリクエストを送信する
+        using (var writer = new StreamWriter(client))
+        {
+            await writer.WriteLineAsync(message);
+        }
+        bool i = client.IsConnected;
+
+        return 0;
+    }
+}
+
+asyncは非同期処理を行うメソッドを表す修飾子です。
+await演算子はawaitのついている処理が完了するまでそれ以降の処理を中断し，
+制御をすぐに呼び出し元に戻します。
+awaitを使用するメソッドでは必ずasync修飾子を付けなければならないルールがあります。
+
+コンストラクタの引数には[サーバ名，パイプ名，パイプの方向，同期であるか非同期であるか]を設定します。
+
+オーバーライドされているので用途にあわせて変えてください。
+NamedPipeClientStream クラス
+
+public NamedPipeClientStream(
+    string serverName,
+    string pipeName,
+    PipeAccessRights desiredAccessRights,
+    PipeOptions options,
+    TokenImpersonationLevel impersonationLevel,
+    HandleInheritability inheritability
+)
+
+パラメーター
+名前 	型 	説明
+serverName 	Type: System.String 	接続対象のリモート コンピューターの名前。ローカル コンピューターを指定する場合は "."。
+pipeName 	Type: System.String 	パイプ名。
+desiredAccessRights 	Type: System.IO.Pipes.PipeAccessRights 	パイプの必要なアクセス権を指定する列挙値の 1 つ。
+options 	Type: System.IO.Pipes.PipeOptions 	パイプを開く方法または作成する方法を決定する列挙値の 1 つ。
+impersonationLevel 	Type: System.Security.Principal.TokenImpersonationLevel 	セキュリティ偽装レベルを決定する列挙値の 1 つ。
+inheritability 	Type: System.IO.HandleInheritability 	基になるハンドルを子プロセスが継承するかどうかを決定する列挙値の 1 つ。
+Edit
+サーバ側（C++）の実装
+
+C++ではCreateNamedPipeを使用します。
+やってることはCreateNamePipeでパイプを開いて，
+クライアントの接続待ちをして，メッセージを受信するだけです。
+今回は応答は返しません。
+
+サーバ側の動き
+
+    クライアントの接続を待つ（）
+    メッセージ受信（）
+
+HANDLE CreateNamedPipe(
+  LPCTSTR lpName,                             // パイプ名
+  DWORD dwOpenMode,                           // パイプを開くモード
+  DWORD dwPipeMode,                           // パイプ固有のモード
+  DWORD nMaxInstances,                        // インスタンスの最大数
+  DWORD nOutBufferSize,                       // 出力バッファのサイズ
+  DWORD nInBufferSize,                        // 入力バッファのサイズ
+  DWORD nDefaultTimeOut,                      // タイムアウトの間隔
+  LPSECURITY_ATTRIBUTES lpSecurityAttributes  // セキュリティ記述子
+);
+
+lpNmaeはパイプ名を文字列で指定します。
+名前の書式は「 \\.\pipe\pipename 」で書き，pipenameがパイプ名になります。
+頭の「.」はローカルマシンを指しますが，ほかのマシンを指定することもできます。
+「pipe」の部分はそのまま使用します。
+プログラム中では「\」にはエスケープシーケンスをつけるので，「\\」となり
+「\\\\.\\pipe\\pipename」となります。
+
+dwOpenPipeには以下を指定できます。
+PIPE_ACCESS_DUPLEX 	双方向のパイプ
+PIPE_ACCESS_INBOUND 	データの流れは、クライアントからサーバーへの方向に限定される
+PIPE_ACCESS_OUTBOUND 	データの流れは、サーバーからクライアントへの方向に限定される
+
+読み込みはReadFileで行います。
+
+参考
+パイプの作成と接続
+第１２２章 名前付きパイプのサーバー側を作る
+Edit
+サーバ側プログラム
+
+内部で無限ループになっていますが，
+メインプログラムからは非同期スレッドで呼び出しています。
+
+//-----------------------------------------------------------------------------
+/** @brief 停止コマンド受付パイプ通信スレッド
+*
+*  名前付きパイプを生成し，
+*  終了コマンドを受けっとたら終了フラグに1を立てて終了するスレッド。
+*
+*  @param [i ] nEndFlag 終了フラグのアドレス
+*  @retval 0以上 正常
+*  @retval 0未満 シミュレーションの終了
+*/
+//-----------------------------------------------------------------------------
+int namedPipeThread(int *endFlag) {
+
+    HANDLE pipeHandle;
+
+    while (true) {
+        // パイプの作成
+        pipeHandle = CreateNamedPipe("\\\\.\\pipe\\namedpipe",
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_MESSAGE,
+            3, // Max instance
+            1024, // Out Buffer Size
+            1024, // In Buffer Size
+            0,  // Timeout 
+            NULL);
+
+        if (pipeHandle == INVALID_HANDLE_VALUE)
+        {
+            // std::cout << "パイプ作成に失敗" << std::endl;
+        }
+
+        // 接続されるまで待機
+        ConnectNamedPipe(pipeHandle, NULL);
+
+        // 文字列受信
+        char recvBuffer[255] = { 0 };
+        DWORD readBytes = 0;
+
+        auto isRead = ReadFile(pipeHandle, recvBuffer, sizeof(recvBuffer), &readBytes, NULL);
+        if (isRead != FALSE) {
+            std::cout << "受信: " << recvBuffer << std::endl;
+            CloseHandle(pipeHandle);
+
+            if (strcmp(recvBuffer, "end")) {
+                *endFlag = 1;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+Edit
+つまづいた点
+
+今回，GUIでボタンを押すたびにメッセージを送りたかったのですが，
+一度目しかメッセージを送れず，つまづきました。
+サーバ側，クライアント側の双方に問題があったためできていませんでした。
+Edit
+連続で書き込みができない
+
+書き込み後にパイプが閉じていました。
+
+クライアント側では初めにWindowのコンストラクタでPipeClientクラスのコンストラクタを呼んで，
+ボタンが押されたらSendMessageメソッドを呼ぶようにしていました。
+一度目はそれで問題がなかったのですが，2度目以降は
+「ObjectDisposedException : 閉じているパイプにはアクセスできません。」の例外が発生しました。
+
+書き込み後にパイプがクローズしてしまうようなので，
+インスタンスをその都度作り直す必要がありました。
+
+また，WriteLineAsync後にisConnectプロパティを見てみると，
+falseになっていました。
+WriteLineAsync前ではtrueだったので，書き込み後にConnectも切れるのだと思われます。
+
+結論
+
+    連続送信する場合も毎回インスタンスを作る（同じスコープ内なら大丈夫なはず）
+    送信前は必ずConnectする
+
+C# 名前付きパイプにおいて、接続を繰り返したい。
+Edit
+ConnectAsyncから先に進めない¶
+Edit
+受信が連続でできない
